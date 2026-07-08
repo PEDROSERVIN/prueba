@@ -12,7 +12,6 @@ import pytesseract
 from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(page_title="Buscador de PDFs", layout="wide")
-
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 def normalizar(texto):
@@ -33,20 +32,33 @@ def resolver_yandex(url):
         return r.json().get("href") if r.status_code == 200 else None
     except: return None
 
+# --- RASTREADOR RECURSIVO CORREGIDO ---
 def obtener_links(url_inicial, max_docs):
     enlaces_pdf = []
-    try:
-        r = requests.get(url_inicial, headers=HEADERS, timeout=15)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        for a in soup.find_all("a", href=True):
-            if len(enlaces_pdf) >= max_docs: break
-            href = a["href"]
-            if "disk.yandex" in href or "yadi.sk" in href:
-                enlaces_pdf.append((href, "yandex"))
-            elif href.endswith(".pdf"):
-                absoluto = urljoin(url_inicial, href)
-                enlaces_pdf.append((absoluto, "pdf"))
-    except Exception: pass
+    visitados = set()
+    por_visitar = [url_inicial]
+    
+    while por_visitar and len(enlaces_pdf) < max_docs:
+        url_actual = por_visitar.pop(0)
+        if url_actual in visitados: continue
+        visitados.add(url_actual)
+        
+        try:
+            r = requests.get(url_actual, headers=HEADERS, timeout=15)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                absoluto = urljoin(url_actual, href)
+                
+                # Si es PDF o Yandex, guardar
+                if "disk.yandex" in href or "yadi.sk" in href:
+                    enlaces_pdf.append((href, "yandex"))
+                elif href.endswith(".pdf"):
+                    enlaces_pdf.append((absoluto, "pdf"))
+                # Si es otra página de la misma revista, seguir explorando
+                elif href.endswith(".html") and "magazines" in absoluto and absoluto not in visitados:
+                    por_visitar.append(absoluto)
+        except: pass
     return enlaces_pdf
 
 def ocr_pagina(pdf_bytes, num_pagina):
@@ -77,7 +89,7 @@ def procesar_pdf(buf, palabra, usar_ocr):
             resultados.append((i, extraer_fragmento(texto, palabra)))
     return resultados
 
-# --- UI RESTAURADA ---
+# --- UI ---
 st.markdown("## ⚽ Buscador en Archivos y Revistas")
 tab_web, tab_local = st.tabs(["🌐 Búsqueda Web", "📁 Archivos Locales"])
 
@@ -99,8 +111,8 @@ with tab_web:
             st.warning("No se encontraron enlaces.")
         else:
             ui_placeholder = st.empty()
-            resultados_txt = ""
             progress_bar = st.progress(0)
+            resultados_txt = ""
             
             for idx, (link_origen, tipo) in enumerate(links):
                 ui_placeholder.info(f"Procesando {idx+1}/{len(links)}: {link_origen.split('/')[-1]}")
@@ -110,7 +122,7 @@ with tab_web:
                     if int(r.headers.get("Content-Length", 0)) < tope_mb * 1024 * 1024:
                         matches = procesar_pdf(io.BytesIO(r.content), palabra_input, usar_ocr)
                         if matches:
-                            st.markdown(f"### Encontrado en Documento {idx+1}")
+                            st.markdown(f"### Encontrado en {link_origen.split('/')[-1]}")
                             st.write(f"🔗 {link_origen}")
                             for pag, frag in matches:
                                 st.success(f"**Pág. {pag}:** {frag}")
@@ -118,8 +130,7 @@ with tab_web:
                 except: pass
                 progress_bar.progress((idx + 1) / len(links))
             ui_placeholder.success("Búsqueda finalizada")
-            if resultados_txt:
-                st.text_area("Resultados para copiar:", value=resultados_txt, height=200)
+            if resultados_txt: st.text_area("Resultados para copiar:", value=resultados_txt, height=200)
 
 with tab_local:
     archivos = st.file_uploader("Subir PDFs", accept_multiple_files=True, type=["pdf"])
