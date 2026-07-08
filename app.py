@@ -12,7 +12,7 @@ import pytesseract
 from concurrent.futures import ThreadPoolExecutor
 
 # 1. Nombre de la pestaña corregido
-st.set_page_config(page_title="Buscador de PDF", layout="wide")
+st.set_page_config(page_title="Buscador", layout="wide")
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
