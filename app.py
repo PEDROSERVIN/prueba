@@ -4,8 +4,9 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from pypdf import PdfReader
-import pytesseract
 from pdf2image import convert_from_bytes
+import pytesseract
+import unicodedata
 
 st.set_page_config(page_title="Buscador", layout="wide")
 HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -25,16 +26,29 @@ def resolver_yandex(url):
         return r.json().get("href") if r.status_code == 200 else None
     except: return None
 
-def obtener_links_de_tomo(url_tomo):
+# --- RASTREADOR RECURSIVO (EL QUE BUSCA ARCHIVOS ADENTRO DE LOS AÑOS) ---
+def obtener_links_recursivos(url_inicial, max_docs=100):
     enlaces = []
-    try:
-        r = requests.get(url_tomo, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if "disk.yandex" in href or "yadi.sk" in href: enlaces.append((href, "yandex"))
-            elif href.endswith(".pdf"): enlaces.append((urljoin(url_tomo, href), "pdf"))
-    except: pass
+    visitados = set([url_inicial])
+    por_visitar = [url_inicial]
+    dominio = urlparse(url_inicial).netloc
+    
+    while por_visitar and len(enlaces) < max_docs:
+        url_actual = por_visitar.pop(0)
+        try:
+            r = requests.get(url_actual, headers=HEADERS, timeout=10)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                absoluto = urljoin(url_actual, href)
+                if "disk.yandex" in href or "yadi.sk" in href:
+                    if (href, "yandex") not in enlaces: enlaces.append((href, "yandex"))
+                elif href.endswith(".pdf"):
+                    if (absoluto, "pdf") not in enlaces: enlaces.append((absoluto, "pdf"))
+                elif href.endswith(".html") and urlparse(absoluto).netloc == dominio and absoluto not in visitados:
+                    visitados.add(absoluto)
+                    por_visitar.append(absoluto)
+        except: pass
     return enlaces
 
 def procesar_pdf(buf, palabra, usar_ocr):
@@ -53,7 +67,7 @@ def procesar_pdf(buf, palabra, usar_ocr):
         return resultados
     except: return []
 
-# --- UI PRINCIPAL ---
+# --- UI ---
 st.markdown("## 🔍 Buscador de Documentos")
 tab1, tab2 = st.tabs(["🌐 Web", "📁 Locales"])
 
@@ -66,19 +80,19 @@ with tab1:
         if not url_input or not palabra_input:
             st.warning("Completá URL y Palabra")
         else:
-            with st.status("Analizando...", expanded=True) as status:
-                links = obtener_links_de_tomo(url_input)
-                st.write(f"Encontrados: {len(links)} documentos.")
+            with st.status("Rastreando y analizando...", expanded=True) as status:
+                links = obtener_links_recursivos(url_input)
+                st.write(f"Documentos encontrados: {len(links)}")
                 
                 for idx, (link, tipo) in enumerate(links):
-                    st.write(f"Procesando {idx+1}/{len(links)}...")
+                    st.write(f"Analizando {idx+1}/{len(links)}...")
                     url = resolver_yandex(link) if tipo == "yandex" else link
                     if url:
                         try:
                             r = requests.get(url, stream=True, timeout=15)
                             matches = procesar_pdf(io.BytesIO(r.content), palabra_input, ocr)
                             if matches:
-                                st.success(f"Encontrado en {link}")
+                                st.success(f"Encontrado en: {link}")
                                 for pag, frag in matches:
                                     st.info(f"Pág {pag}: {frag}")
                         except: pass
