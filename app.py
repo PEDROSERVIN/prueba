@@ -11,8 +11,7 @@ from pdf2image import convert_from_bytes
 import pytesseract
 from concurrent.futures import ThreadPoolExecutor
 
-# 1. Nombre de la pestaña corregido
-st.set_page_config(page_title="Buscador", layout="wide")
+st.set_page_config(page_title="Buscador de PDF", layout="wide")
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
@@ -98,18 +97,17 @@ if "resultados_guardados" not in st.session_state:
 if "busqueda_terminada" not in st.session_state:
     st.session_state.busqueda_terminada = False
 
-# 2. Branding incorporado
-st.markdown("## 🔍 Buscador de Documentos | Pese Scout")
-st.markdown("Herramienta exclusiva para rastrear conceptos clave en bibliotecas PDF o enlaces de Yandex alojados en webs.")
+st.markdown("## 🔍 Buscador de Documentos")
+st.markdown("Herramienta para rastrear palabras clave en bibliotecas PDF o enlaces de Yandex alojados en webs.")
 
 tab_web, tab_local = st.tabs(["🌐 Buscar en la Web (Links)", "📁 Buscar en Archivos Locales (Subir PDFs)"])
 
 with tab_web:
     col1, col2 = st.columns([3, 1])
-    with col1: # Acá está la sangría corregida
+    with col1:
         url_input = st.text_input("URL Índice (donde están los links):", value="", placeholder="Ej: https://fanpictures.ru/...")
     with col2:
-        palabra_input = st.text_input("Palabra clave:", value="", placeholder="Ej: táctica, presión, etc.")
+        palabra_input = st.text_input("Palabra clave:", value="", placeholder="Insertar palabra")
 
     col3, col4, col5 = st.columns(3)
     with col3: max_docs = st.number_input("Máx. documentos a revisar:", min_value=1, value=50)
@@ -117,7 +115,6 @@ with tab_web:
     with col5: usar_ocr = st.checkbox("Usar OCR (Lento, para escaneos sin texto)", value=False)
 
     if st.button("Iniciar Búsqueda Web", type="primary"):
-        # 3. Validación: Freno si los campos están vacíos
         if not url_input or not palabra_input:
             st.error("⚠️ Por favor, ingresá una URL y una palabra clave para buscar.")
         else:
@@ -159,8 +156,8 @@ with tab_web:
                 st.rerun()
 
 with tab_local:
-    archivos_subidos = st.file_uploader("Arrastrá tus PDFs acá (Ejemplo: Archivos descargados de tu Drive)", type=["pdf"], accept_multiple_files=True)
-    palabra_local = st.text_input("Palabra clave para archivos locales:", value="", placeholder="Ej: bloque bajo, transiciones...", key="palabra_local")
+    archivos_subidos = st.file_uploader("Arrastrá tus PDFs acá", type=["pdf"], accept_multiple_files=True)
+    palabra_local = st.text_input("Palabra clave para archivos locales:", value="", placeholder="Insertar palabra", key="palabra_local")
     usar_ocr_local = st.checkbox("Usar OCR (Archivos locales)", value=False, key="ocr_local")
     
     if st.button("Buscar en PDFs subidos", type="primary"):
@@ -193,7 +190,6 @@ if st.session_state.busqueda_terminada:
     else:
         st.success("¡Búsqueda finalizada con éxito!")
         
-        # 4. Función para exportar a CSV
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(['Documento / Enlace', 'Página', 'Fragmento'])
