@@ -32,17 +32,15 @@ def resolver_yandex(url):
         return r.json().get("href") if r.status_code == 200 else None
     except: return None
 
-# --- RASTREADOR RECURSIVO CORREGIDO ---
+# --- RASTREADOR RECURSIVO ---
 def obtener_links(url_inicial, max_docs):
     enlaces_pdf = []
-    visitados = set()
+    # Usamos una lista para visitar páginas (decadas -> años -> PDFs)
+    visitados = set([url_inicial])
     por_visitar = [url_inicial]
     
     while por_visitar and len(enlaces_pdf) < max_docs:
         url_actual = por_visitar.pop(0)
-        if url_actual in visitados: continue
-        visitados.add(url_actual)
-        
         try:
             r = requests.get(url_actual, headers=HEADERS, timeout=15)
             soup = BeautifulSoup(r.text, 'html.parser')
@@ -50,41 +48,24 @@ def obtener_links(url_inicial, max_docs):
                 href = a["href"]
                 absoluto = urljoin(url_actual, href)
                 
-                # Si es PDF o Yandex, guardar
                 if "disk.yandex" in href or "yadi.sk" in href:
-                    enlaces_pdf.append((href, "yandex"))
+                    if (href, "yandex") not in enlaces_pdf: enlaces_pdf.append((href, "yandex"))
                 elif href.endswith(".pdf"):
-                    enlaces_pdf.append((absoluto, "pdf"))
-                # Si es otra página de la misma revista, seguir explorando
-                elif href.endswith(".html") and "magazines" in absoluto and absoluto not in visitados:
+                    if (absoluto, "pdf") not in enlaces_pdf: enlaces_pdf.append((absoluto, "pdf"))
+                elif href.endswith(".html") and "fanpictures" in absoluto and absoluto not in visitados:
+                    visitados.add(absoluto)
                     por_visitar.append(absoluto)
         except: pass
     return enlaces_pdf
-
-def ocr_pagina(pdf_bytes, num_pagina):
-    try:
-        imgs = convert_from_bytes(pdf_bytes, first_page=num_pagina, last_page=num_pagina, dpi=150)
-        if imgs: return pytesseract.image_to_string(imgs[0], lang="spa")
-    except: pass
-    return ""
 
 def procesar_pdf(buf, palabra, usar_ocr):
     try:
         reader = PdfReader(buf)
     except: return []
     resultados = []
-    textos = {}
-    paginas_vacias = []
+    # Procesar texto
     for i, pagina in enumerate(reader.pages, 1):
         texto = pagina.extract_text() or ""
-        textos[i] = texto
-        if not texto.strip(): paginas_vacias.append(i)
-    if usar_ocr and paginas_vacias:
-        pdf_bytes = buf.getvalue()
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            futs = {ex.submit(ocr_pagina, pdf_bytes, p): p for p in paginas_vacias}
-            for f in futs: textos[futs[f]] = f.result()
-    for i, texto in textos.items():
         if texto and normalizar(palabra) in normalizar(texto):
             resultados.append((i, extraer_fragmento(texto, palabra)))
     return resultados
@@ -101,7 +82,7 @@ with tab_web:
         palabra_input = st.text_input("Palabra clave:", value="Menotti")
     
     col3, col4, col5 = st.columns(3)
-    with col3: max_docs = st.number_input("Máx. documentos:", min_value=1, value=30)
+    with col3: max_docs = st.number_input("Máx. documentos:", min_value=1, value=100)
     with col4: tope_mb = st.number_input("Tope tamaño (MB):", min_value=1, value=80)
     with col5: usar_ocr = st.checkbox("Usar OCR", value=True)
 
@@ -110,27 +91,23 @@ with tab_web:
         if not links:
             st.warning("No se encontraron enlaces.")
         else:
-            ui_placeholder = st.empty()
+            ui_status = st.empty()
+            ui_status.info(f"Se encontraron {len(links)} documentos. Analizando...")
             progress_bar = st.progress(0)
-            resultados_txt = ""
             
             for idx, (link_origen, tipo) in enumerate(links):
-                ui_placeholder.info(f"Procesando {idx+1}/{len(links)}: {link_origen.split('/')[-1]}")
+                ui_status.info(f"Procesando {idx+1}/{len(links)}: {link_origen.split('/')[-1]}")
                 url_directa = resolver_yandex(link_origen) if tipo == "yandex" else link_origen
                 try:
                     r = requests.get(url_directa, headers=HEADERS, stream=True, timeout=20)
-                    if int(r.headers.get("Content-Length", 0)) < tope_mb * 1024 * 1024:
-                        matches = procesar_pdf(io.BytesIO(r.content), palabra_input, usar_ocr)
-                        if matches:
-                            st.markdown(f"### Encontrado en {link_origen.split('/')[-1]}")
-                            st.write(f"🔗 {link_origen}")
-                            for pag, frag in matches:
-                                st.success(f"**Pág. {pag}:** {frag}")
-                                resultados_txt += f"Doc: {link_origen} | Pág: {pag} | {frag}\n"
+                    matches = procesar_pdf(io.BytesIO(r.content), palabra_input, usar_ocr)
+                    if matches:
+                        st.markdown(f"### Encontrado en Documento {idx+1}")
+                        st.write(f"🔗 {link_origen}")
+                        for pag, frag in matches: st.success(f"**Pág. {pag}:** {frag}")
                 except: pass
                 progress_bar.progress((idx + 1) / len(links))
-            ui_placeholder.success("Búsqueda finalizada")
-            if resultados_txt: st.text_area("Resultados para copiar:", value=resultados_txt, height=200)
+            ui_status.success("Búsqueda finalizada")
 
 with tab_local:
     archivos = st.file_uploader("Subir PDFs", accept_multiple_files=True, type=["pdf"])
