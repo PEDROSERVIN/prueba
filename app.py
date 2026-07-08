@@ -90,58 +90,105 @@ def procesar_pdf(buf, palabra, usar_ocr):
     
     return resultados
 
+# --- INICIALIZAR MEMORIA DE LA APP ---
+if "resultados_guardados" not in st.session_state:
+    st.session_state.resultados_guardados = []
+if "busqueda_terminada" not in st.session_state:
+    st.session_state.busqueda_terminada = False
+
 st.title("⚽ Buscador en Archivos y Revistas")
 st.markdown("Herramienta para rastrear palabras clave dentro de bibliotecas PDF o enlaces de Yandex alojados en webs.")
 
-col1, col2 = st.columns([3, 1])
-with col1:
-    url_input = st.text_input("URL Índice (donde están los links):", value="https://fanpictures.ru/magazines/elgrafico/1980-89.html")
-with col2:
-    palabra_input = st.text_input("Palabra clave:", value="Menotti")
+tab_web, tab_local = st.tabs(["🌐 Buscar en la Web (Links)", "📁 Buscar en Archivos Locales (Subir PDFs)"])
 
-col3, col4, col5 = st.columns(3)
-with col3: max_docs = st.number_input("Máx. documentos a revisar:", min_value=1, value=50)
-with col4: tope_mb = st.number_input("Tope tamaño por PDF (MB):", min_value=1, value=80)
-with col5: usar_ocr = st.checkbox("Usar OCR (Lento, para escaneos sin texto)", value=False)
+with tab_web:
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        url_input = st.text_input("URL Índice (donde están los links):", value="https://fanpictures.ru/magazines/elgrafico/1980-89.html")
+    with col2:
+        palabra_input = st.text_input("Palabra clave:", value="Menotti")
 
-if st.button("Iniciar Búsqueda", type="primary"):
-    st.info("Buscando enlaces... no cierres la página.")
-    links = obtener_links(url_input, max_docs)
-    
-    if not links:
-        st.warning("No se encontraron enlaces a PDFs o Yandex en esa URL.")
-    else:
-        st.success(f"Se encontraron {len(links)} documentos. Analizando...")
+    col3, col4, col5 = st.columns(3)
+    with col3: max_docs = st.number_input("Máx. documentos a revisar:", min_value=1, value=50)
+    with col4: tope_mb = st.number_input("Tope tamaño por PDF (MB):", min_value=1, value=80)
+    with col5: usar_ocr = st.checkbox("Usar OCR (Lento, para escaneos sin texto)", value=False)
+
+    if st.button("Iniciar Búsqueda Web", type="primary"):
+        st.session_state.resultados_guardados = [] 
+        st.session_state.busqueda_terminada = False
+        st.info("Buscando enlaces... Por favor, no minimices ni cambies de pestaña para evitar que el navegador corte el proceso.")
         
-        progress_bar = st.progress(0)
-        resultados_totales = 0
-
-        for idx, (link_origen, tipo) in enumerate(links):
-            try:
-                url_directa = resolver_yandex(link_origen) if tipo == "yandex" else link_origen
-                if not url_directa: continue
-                
-                r = requests.get(url_directa, headers=HEADERS, stream=True, timeout=20)
-                if int(r.headers.get("Content-Length", 0)) > tope_mb * 1024 * 1024:
-                    continue # Salta si es muy pesado
-                
-                buf = io.BytesIO(r.content)
-                matches = procesar_pdf(buf, palabra_input, usar_ocr)
-                
-                if matches:
-                    resultados_totales += len(matches)
-                    st.markdown(f"### Encontrado en Documento {idx+1}")
-                    st.write(f"🔗 **Enlace original:** [{link_origen}]({link_origen})")
-                    for pag, frag in matches:
-                        st.success(f"**Pág. {pag}:** {frag}")
-                
-                buf.close()
-            except Exception as e:
-                pass
-            
-            progress_bar.progress((idx + 1) / len(links))
+        links = obtener_links(url_input, max_docs)
         
-        if resultados_totales == 0:
-            st.warning("Se revisaron los documentos pero no se encontró la palabra.")
+        if not links:
+            st.warning("No se encontraron enlaces a PDFs o Yandex en esa URL.")
         else:
-            st.balloons()
+            progress_bar = st.progress(0)
+            for idx, (link_origen, tipo) in enumerate(links):
+                try:
+                    url_directa = resolver_yandex(link_origen) if tipo == "yandex" else link_origen
+                    if not url_directa: continue
+                    
+                    r = requests.get(url_directa, headers=HEADERS, stream=True, timeout=20)
+                    if int(r.headers.get("Content-Length", 0)) > tope_mb * 1024 * 1024:
+                        continue 
+                    
+                    buf = io.BytesIO(r.content)
+                    matches = procesar_pdf(buf, palabra_input, usar_ocr)
+                    
+                    if matches:
+                        st.session_state.resultados_guardados.append({
+                            "link": link_origen,
+                            "matches": matches
+                        })
+                    
+                    buf.close()
+                except Exception as e:
+                    pass
+                
+                progress_bar.progress((idx + 1) / len(links))
+            
+            st.session_state.busqueda_terminada = True
+            st.rerun()
+
+with tab_local:
+    archivos_subidos = st.file_uploader("Arrastrá tus PDFs acá (Ejemplo: Archivos descargados de tu Drive)", type=["pdf"], accept_multiple_files=True)
+    palabra_local = st.text_input("Palabra clave para archivos locales:", value="Menotti", key="palabra_local")
+    usar_ocr_local = st.checkbox("Usar OCR (Archivos locales)", value=False, key="ocr_local")
+    
+    if st.button("Buscar en PDFs subidos", type="primary"):
+        st.session_state.resultados_guardados = []
+        st.session_state.busqueda_terminada = False
+        
+        if not archivos_subidos:
+            st.warning("Subí al menos un PDF para buscar.")
+        else:
+            progress_bar_local = st.progress(0)
+            for idx, archivo in enumerate(archivos_subidos):
+                matches = procesar_pdf(io.BytesIO(archivo.getvalue()), palabra_local, usar_ocr_local)
+                if matches:
+                    st.session_state.resultados_guardados.append({
+                        "link": archivo.name,
+                        "matches": matches
+                    })
+                progress_bar_local.progress((idx + 1) / len(archivos_subidos))
+                
+            st.session_state.busqueda_terminada = True
+            st.rerun()
+
+# --- MOSTRAR RESULTADOS GUARDADOS EN MEMORIA ---
+if st.session_state.busqueda_terminada:
+    st.markdown("---")
+    if len(st.session_state.resultados_guardados) == 0:
+        st.warning("Se revisaron los documentos pero no se encontró la palabra.")
+    else:
+        st.success("¡Búsqueda finalizada con éxito!")
+        for res in st.session_state.resultados_guardados:
+            st.markdown(f"### Encontrado en: {res['link']}")
+            for pag, frag in res['matches']:
+                st.info(f"**Pág. {pag}:** {frag}")
+                
+        if st.button("Limpiar resultados"):
+            st.session_state.resultados_guardados = []
+            st.session_state.busqueda_terminada = False
+            st.rerun()
