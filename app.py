@@ -1,4 +1,7 @@
 import io
+import re
+import csv
+import unicodedata
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
@@ -6,23 +9,23 @@ from urllib.parse import urljoin, urlparse
 from pypdf import PdfReader
 from pdf2image import convert_from_bytes
 import pytesseract
-import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 
-# Configuración básica
-st.set_page_config(page_title="Buscador", layout="wide")
+st.set_page_config(page_title="Buscador de PDFs", layout="wide")
+
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# Funciones de lógica
 def normalizar(texto):
     texto = texto.lower()
     return "".join(c for c in unicodedata.normalize("NFKD", texto) if not unicodedata.combining(c))
 
 def extraer_fragmento(texto, palabra, contexto=100):
-    idx = texto.lower().find(palabra.lower())
-    if idx == -1: return ""
-    inicio = max(0, idx - contexto)
-    fin = min(len(texto), idx + len(palabra) + contexto)
-    return texto[inicio:fin]
+    idx_norm = normalizar(texto).find(normalizar(palabra))
+    if idx_norm == -1: return ""
+    inicio = max(0, idx_norm - contexto)
+    fin = min(len(texto), idx_norm + len(palabra) + contexto)
+    frag = texto[inicio:fin].replace("\n", " ").strip()
+    return ("..." if inicio > 0 else "") + frag + ("..." if fin < len(texto) else "")
 
 def resolver_yandex(url):
     try:
@@ -30,88 +33,96 @@ def resolver_yandex(url):
         return r.json().get("href") if r.status_code == 200 else None
     except: return None
 
-def obtener_links_web(url_input):
-    enlaces = []
+def obtener_links(url_inicial, max_docs):
+    enlaces_pdf = []
     try:
-        r = requests.get(url_input, headers=HEADERS, timeout=15)
+        r = requests.get(url_inicial, headers=HEADERS, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         for a in soup.find_all("a", href=True):
+            if len(enlaces_pdf) >= max_docs: break
             href = a["href"]
-            if "disk.yandex" in href or "yadi.sk" in href: enlaces.append((href, "yandex"))
-            elif href.endswith(".pdf"): enlaces.append((urljoin(url_input, href), "pdf"))
+            if "disk.yandex" in href or "yadi.sk" in href:
+                enlaces_pdf.append((href, "yandex"))
+            elif href.endswith(".pdf"):
+                absoluto = urljoin(url_inicial, href)
+                enlaces_pdf.append((absoluto, "pdf"))
+    except Exception: pass
+    return enlaces_pdf
+
+def ocr_pagina(pdf_bytes, num_pagina):
+    try:
+        imgs = convert_from_bytes(pdf_bytes, first_page=num_pagina, last_page=num_pagina, dpi=150)
+        if imgs: return pytesseract.image_to_string(imgs[0], lang="spa")
     except: pass
-    return enlaces
+    return ""
 
 def procesar_pdf(buf, palabra, usar_ocr):
     try:
         reader = PdfReader(buf)
-        resultados = []
-        for i, pagina in enumerate(reader.pages, 1):
-            texto = pagina.extract_text() or ""
-            if not texto.strip() and usar_ocr:
-                try:
-                    imgs = convert_from_bytes(buf.getvalue(), first_page=i, last_page=i, dpi=100)
-                    if imgs: texto = pytesseract.image_to_string(imgs[0], lang="spa")
-                except: pass
-            if texto and palabra.lower() in texto.lower():
-                resultados.append((i, extraer_fragmento(texto, palabra)))
-        return resultados
     except: return []
+    resultados = []
+    textos = {}
+    paginas_vacias = []
+    for i, pagina in enumerate(reader.pages, 1):
+        texto = pagina.extract_text() or ""
+        textos[i] = texto
+        if not texto.strip(): paginas_vacias.append(i)
+    if usar_ocr and paginas_vacias:
+        pdf_bytes = buf.getvalue()
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            futs = {ex.submit(ocr_pagina, pdf_bytes, p): p for p in paginas_vacias}
+            for f in futs: textos[futs[f]] = f.result()
+    for i, texto in textos.items():
+        if texto and normalizar(palabra) in normalizar(texto):
+            resultados.append((i, extraer_fragmento(texto, palabra)))
+    return resultados
 
-# Inicialización de estado
-if "resultados" not in st.session_state:
-    st.session_state.resultados = []
+# --- UI ---
+st.markdown("## ⚽ Buscador en Archivos y Revistas")
+tab_web, tab_local = st.tabs(["🌐 Búsqueda Web", "📁 Archivos Locales"])
 
-st.markdown("## 🔍 Buscador de Documentos")
-tab1, tab2 = st.tabs(["🌐 Búsqueda Web", "📁 Archivos Locales"])
-
-# --- LÓGICA DE WEB ---
-with tab1:
-    url = st.text_input("URL del año/tomo:")
-    palabra = st.text_input("Palabra clave:")
-    ocr_web = st.checkbox("Usar OCR")
+with tab_web:
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        url_input = st.text_input("URL Índice:", value="https://fanpictures.ru/magazines/elgrafico/1980-89.html")
+    with col2:
+        palabra_input = st.text_input("Palabra clave:", value="Menotti")
     
-    if st.button("Buscar en Web"):
-        st.session_state.resultados = [] # Limpiar resultados anteriores
-        with st.status("Buscando en la web...", expanded=True) as status:
-            links = obtener_links_web(url)
-            st.write(f"Enlaces encontrados: {len(links)}")
+    col3, col4, col5 = st.columns(3)
+    with col3: max_docs = st.number_input("Máx. documentos:", min_value=1, value=30)
+    with col4: tope_mb = st.number_input("Tope tamaño (MB):", min_value=1, value=80)
+    with col5: usar_ocr = st.checkbox("Usar OCR", value=True)
+
+    if st.button("Iniciar Búsqueda Web"):
+        links = obtener_links(url_input, max_docs)
+        if not links:
+            st.warning("No se encontraron enlaces.")
+        else:
+            ui_placeholder = st.empty()
+            ui_placeholder.info(f"Se encontraron {len(links)} documentos. Analizando...")
             
-            for idx, (link, tipo) in enumerate(links):
-                st.write(f"Procesando {idx+1}/{len(links)}...")
-                url_final = resolver_yandex(link) if tipo == "yandex" else link
-                if url_final:
-                    try:
-                        r = requests.get(url_final, stream=True, timeout=15)
-                        matches = procesar_pdf(io.BytesIO(r.content), palabra, ocr_web)
+            progress_bar = st.progress(0)
+            for idx, (link_origen, tipo) in enumerate(links):
+                ui_placeholder.info(f"Procesando {idx+1}/{len(links)}: {link_origen.split('/')[-1]}")
+                url_directa = resolver_yandex(link_origen) if tipo == "yandex" else link_origen
+                try:
+                    r = requests.get(url_directa, headers=HEADERS, stream=True, timeout=20)
+                    if int(r.headers.get("Content-Length", 0)) < tope_mb * 1024 * 1024:
+                        matches = procesar_pdf(io.BytesIO(r.content), palabra_input, usar_ocr)
                         if matches:
-                            st.session_state.resultados.append({"link": link, "matches": matches})
-                    except: pass
-            status.update(label="Búsqueda completa", state="complete")
+                            st.markdown(f"### Encontrado en Documento {idx+1}")
+                            st.write(f"🔗 {link_origen}")
+                            for pag, frag in matches: st.success(f"**Pág. {pag}:** {frag}")
+                except: pass
+                progress_bar.progress((idx + 1) / len(links))
+            ui_placeholder.success("Búsqueda finalizada")
 
-# --- LÓGICA DE LOCALES ---
-with tab2:
-    archivos = st.file_uploader("Subir PDFs", accept_multiple_files=True, type="pdf")
-    palabra_local = st.text_input("Palabra clave (Locales):")
-    ocr_local = st.checkbox("Usar OCR (Locales)")
-    
+with tab_local:
+    archivos = st.file_uploader("Subir PDFs", accept_multiple_files=True, type=["pdf"])
+    palabra_local = st.text_input("Palabra clave (Local):")
     if st.button("Buscar en Locales"):
-        st.session_state.resultados = []
         for arch in archivos:
-            matches = procesar_pdf(io.BytesIO(arch.getvalue()), palabra_local, ocr_local)
+            matches = procesar_pdf(io.BytesIO(arch.getvalue()), palabra_local, False)
             if matches:
-                st.session_state.resultados.append({"link": arch.name, "matches": matches})
-
-# --- MOSTRAR RESULTADOS PERSISTENTES ---
-if st.session_state.resultados:
-    st.markdown("---")
-    texto_copiar = ""
-    for res in st.session_state.resultados:
-        st.markdown(f"### 📄 {res['link']}")
-        texto_copiar += f"\nArchivo: {res['link']}\n"
-        for pag, frag in res['matches']:
-            st.info(f"**Pág {pag}:** {frag}")
-            texto_copiar += f"Pág {pag}: {frag}\n"
-    
-    st.markdown("### 📋 Copiar resultados para compartir")
-    st.text_area("Seleccioná y copiá:", value=texto_copiar, height=200)
+                st.markdown(f"### 📄 {arch.name}")
+                for pag, frag in matches: st.info(f"Pág {pag}: {frag}")
