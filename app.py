@@ -32,19 +32,29 @@ def resolver_yandex(url):
 
 def obtener_links(url_inicial, max_docs):
     enlaces_pdf = []
-    try:
-        r = requests.get(url_inicial, headers=HEADERS, timeout=15)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        for a in soup.find_all("a", href=True):
-            if len(enlaces_pdf) >= max_docs: break
-            href = a["href"]
-            if "disk.yandex" in href or "yadi.sk" in href:
-                enlaces_pdf.append((href, "yandex"))
-            elif href.endswith(".pdf"):
-                absoluto = urljoin(url_inicial, href)
-                enlaces_pdf.append((absoluto, "pdf"))
-    except Exception:
-        pass
+    visitados = set([url_inicial])
+    por_visitar = [url_inicial]
+    dominio = urlparse(url_inicial).netloc
+
+    while por_visitar and len(enlaces_pdf) < max_docs:
+        url_actual = por_visitar.pop(0)
+        try:
+            r = requests.get(url_actual, headers=HEADERS, timeout=10)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            for a in soup.find_all("a", href=True):
+                if len(enlaces_pdf) >= max_docs: break
+                href = a["href"]
+                absoluto = urljoin(url_actual, href)
+                
+                if "disk.yandex" in href or "yadi.sk" in href:
+                    enlaces_pdf.append((href, "yandex"))
+                elif href.endswith(".pdf"):
+                    enlaces_pdf.append((absoluto, "pdf"))
+                elif href.endswith(".html") and urlparse(absoluto).netloc == dominio and absoluto not in visitados:
+                    visitados.add(absoluto)
+                    por_visitar.append(absoluto)
+        except:
+            pass
     return enlaces_pdf
 
 def ocr_pagina(pdf_bytes, num_pagina):
