@@ -11,10 +11,9 @@ from pdf2image import convert_from_bytes
 import pytesseract
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="Buscador", layout="wide")
+st.set_page_config(page_title="Buscador PDF", layout="wide")
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# --- FUNCIONES BASE ---
 def normalizar(texto):
     texto = texto.lower()
     return "".join(c for c in unicodedata.normalize("NFKD", texto) if not unicodedata.combining(c))
@@ -33,18 +32,16 @@ def resolver_yandex(url):
         return r.json().get("href") if r.status_code == 200 else None
     except: return None
 
-# --- FUNCIONES DE RASTREO ---
 @st.cache_data
 def obtener_revistas():
     url = "https://fanpictures.ru/magazines/"
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
-        # Selector robusto para los links de revistas
         revistas = {}
         for a in soup.select("a[href*='/magazines/']"):
             nombre = a.text.strip()
-            if nombre and len(nombre) > 3: # Filtro básico
+            if nombre and len(nombre) > 3:
                 revistas[nombre] = urljoin(url, a['href'])
         return revistas
     except: return {}
@@ -60,13 +57,12 @@ def obtener_años(revista_url):
         return años
     except: return {}
 
-def obtener_links_de_tomo(url_tomo, max_docs, ui_estado):
+def obtener_links_de_tomo(url_tomo):
     enlaces = []
     try:
         r = requests.get(url_tomo, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         for a in soup.find_all("a", href=True):
-            if len(enlaces) >= max_docs: break
             href = a["href"]
             if "disk.yandex" in href or "yadi.sk" in href: enlaces.append((href, "yandex"))
             elif href.endswith(".pdf"): enlaces.append((urljoin(url_tomo, href), "pdf"))
@@ -89,56 +85,57 @@ def procesar_pdf(buf, palabra, usar_ocr):
             resultados.append((i, extraer_fragmento(texto, palabra)))
     return resultados
 
-# --- UI PRINCIPAL ---
+# --- UI ---
 if "resultados_guardados" not in st.session_state: st.session_state.resultados_guardados = []
 if "busqueda_terminada" not in st.session_state: st.session_state.busqueda_terminada = False
 
 st.markdown("## 🔍 Buscador de Documentos")
-
 tab1, tab2, tab3 = st.tabs(["🌐 Búsqueda Guiada", "🌐 Búsqueda Web (Custom)", "📁 Archivos Locales"])
 
-with tab1: # GUIADA
+with tab1:
     revistas = obtener_revistas()
-    rev_sel = st.selectbox("Seleccionar Revista:", list(revistas.keys()))
-    años = obtener_años(revistas[rev_sel])
-    año_sel = st.selectbox("Seleccionar Año:", list(años.keys()))
-    palabra_guia = st.text_input("Palabra clave:", placeholder="Insertar palabra", key="pal_guia")
-    
-    if st.button("Buscar en Año Seleccionado"):
-        st.session_state.resultados_guardados = []
-        ui = st.empty()
-        links = obtener_links_de_tomo(años[año_sel], 50, ui)
-        for link, tipo in links:
-            url = resolver_yandex(link) if tipo == "yandex" else link
-            if url:
-                r = requests.get(url, stream=True, timeout=15)
-                matches = procesar_pdf(io.BytesIO(r.content), palabra_guia, True)
-                if matches: st.session_state.resultados_guardados.append({"link": link, "matches": matches})
-        st.session_state.busqueda_terminada = True
-        st.rerun()
+    if revistas:
+        rev_sel = st.selectbox("Seleccionar Revista:", list(revistas.keys()))
+        años = obtener_años(revistas[rev_sel])
+        if años:
+            año_sel = st.selectbox("Seleccionar Año:", list(años.keys()))
+            palabra_guia = st.text_input("Palabra clave:", placeholder="Insertar palabra")
+            
+            if st.button("Buscar en Año Seleccionado"):
+                st.session_state.resultados_guardados = []
+                with st.spinner("Buscando..."):
+                    links = obtener_links_de_tomo(años[año_sel])
+                    if not links: st.warning("No se encontraron links de descarga.")
+                    for link, tipo in links:
+                        url = resolver_yandex(link) if tipo == "yandex" else link
+                        if url:
+                            r = requests.get(url, stream=True, timeout=15)
+                            matches = procesar_pdf(io.BytesIO(r.content), palabra_guia, True)
+                            if matches: st.session_state.resultados_guardados.append({"link": link, "matches": matches})
+                    st.session_state.busqueda_terminada = True
+                    st.rerun()
+        else: st.warning("Cargando años...")
+    else: st.error("No se pudo conectar con la base de datos de FanPictures.")
 
-with tab2: # CUSTOM
+with tab2:
     url_input = st.text_input("URL Índice:", placeholder="Ej: https://fanpictures.ru/...")
     palabra_input = st.text_input("Palabra clave:", placeholder="Insertar palabra")
-    ocr_custom = st.checkbox("Usar OCR", key="ocr_custom")
-    
-    if st.button("Iniciar Búsqueda en URL"):
+    if st.button("Buscar en URL"):
         st.session_state.resultados_guardados = []
-        ui = st.empty()
-        links = obtener_links_de_tomo(url_input, 50, ui)
-        for link, tipo in links:
-            url = resolver_yandex(link) if tipo == "yandex" else link
-            if url:
-                ui.info(f"Analizando: {link}")
-                r = requests.get(url, stream=True, timeout=15)
-                matches = procesar_pdf(io.BytesIO(r.content), palabra_input, ocr_custom)
-                if matches: st.session_state.resultados_guardados.append({"link": link, "matches": matches})
+        with st.spinner("Buscando..."):
+            links = obtener_links_de_tomo(url_input)
+            for link, tipo in links:
+                url = resolver_yandex(link) if tipo == "yandex" else link
+                if url:
+                    r = requests.get(url, stream=True, timeout=15)
+                    matches = procesar_pdf(io.BytesIO(r.content), palabra_input, True)
+                    if matches: st.session_state.resultados_guardados.append({"link": link, "matches": matches})
         st.session_state.busqueda_terminada = True
         st.rerun()
 
-# --- RESULTADOS ---
 if st.session_state.busqueda_terminada:
     st.markdown("---")
+    if not st.session_state.resultados_guardados: st.warning("No se encontraron coincidencias.")
     for res in st.session_state.resultados_guardados:
         st.markdown(f"### 📄 {res['link']}")
         for pag, frag in res['matches']:
