@@ -77,7 +77,7 @@ def procesar_pdf(buf, palabra, usar_ocr):
             resultados.append((i, extraer_fragmento(texto, palabra)))
     return resultados
 
-# --- UI ---
+# --- UI RESTAURADA ---
 st.markdown("## ⚽ Buscador en Archivos y Revistas")
 tab_web, tab_local = st.tabs(["🌐 Búsqueda Web", "📁 Archivos Locales"])
 
@@ -99,9 +99,9 @@ with tab_web:
             st.warning("No se encontraron enlaces.")
         else:
             ui_placeholder = st.empty()
-            ui_placeholder.info(f"Se encontraron {len(links)} documentos. Analizando...")
-            
+            resultados_txt = ""
             progress_bar = st.progress(0)
+            
             for idx, (link_origen, tipo) in enumerate(links):
                 ui_placeholder.info(f"Procesando {idx+1}/{len(links)}: {link_origen.split('/')[-1]}")
                 url_directa = resolver_yandex(link_origen) if tipo == "yandex" else link_origen
@@ -112,10 +112,14 @@ with tab_web:
                         if matches:
                             st.markdown(f"### Encontrado en Documento {idx+1}")
                             st.write(f"🔗 {link_origen}")
-                            for pag, frag in matches: st.success(f"**Pág. {pag}:** {frag}")
+                            for pag, frag in matches:
+                                st.success(f"**Pág. {pag}:** {frag}")
+                                resultados_txt += f"Doc: {link_origen} | Pág: {pag} | {frag}\n"
                 except: pass
                 progress_bar.progress((idx + 1) / len(links))
             ui_placeholder.success("Búsqueda finalizada")
+            if resultados_txt:
+                st.text_area("Resultados para copiar:", value=resultados_txt, height=200)
 
 with tab_local:
     archivos = st.file_uploader("Subir PDFs", accept_multiple_files=True, type=["pdf"])
