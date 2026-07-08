@@ -10,8 +10,7 @@ from pdf2image import convert_from_bytes
 import pytesseract
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="Buscador Táctico en PDFs", layout="wide")
-
+st.set_page_config(page_title="Buscador de PDF", layout="wide")
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 def normalizar(texto):
@@ -104,9 +103,9 @@ tab_web, tab_local = st.tabs(["🌐 Buscar en la Web (Links)", "📁 Buscar en A
 with tab_web:
     col1, col2 = st.columns([3, 1])
     with col1:
-        url_input = st.text_input("URL Índice (donde están los links):", value="https://fanpictures.ru/magazines/elgrafico/1980-89.html")
+    url_input = st.text_input("URL Índice (donde están los links):", value="", placeholder="Ej: https://fanpictures.ru/...")
     with col2:
-        palabra_input = st.text_input("Palabra clave:", value="Menotti")
+    palabra_input = st.text_input("Palabra clave:", value="", placeholder="Ej: táctica, presión, etc.")
 
     col3, col4, col5 = st.columns(3)
     with col3: max_docs = st.number_input("Máx. documentos a revisar:", min_value=1, value=50)
@@ -153,7 +152,7 @@ with tab_web:
 
 with tab_local:
     archivos_subidos = st.file_uploader("Arrastrá tus PDFs acá (Ejemplo: Archivos descargados de tu Drive)", type=["pdf"], accept_multiple_files=True)
-    palabra_local = st.text_input("Palabra clave para archivos locales:", value="Menotti", key="palabra_local")
+    palabra_local = st.text_input("Palabra clave para archivos locales:", value="", placeholder="Ej: táctica, presión...", key="palabra_local")
     usar_ocr_local = st.checkbox("Usar OCR (Archivos locales)", value=False, key="ocr_local")
     
     if st.button("Buscar en PDFs subidos", type="primary"):
